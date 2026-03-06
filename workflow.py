@@ -11,6 +11,7 @@ are built and exposed in generated workspace code.
 """
 
 from per_datasets import workflow
+from per_datasets.workflow import WorkflowStreamInput, WorkflowStreamOutput
 
 @workflow.unary
 def subtract(a: float, b: float) -> float:
@@ -23,12 +24,44 @@ def subtract(a: float, b: float) -> float:
     return a - b
 
 
-@workflow.unary
-def multiply(a: float, b: float) -> float:
-    """Multiply two numbers.
+@workflow.output_stream
+def count_up(seed: float, step: float, count: int) -> WorkflowStreamOutput[float]:
+    """Return a server-side stream from multi-parameter inputs.
 
-    Example:
-        >>> multiply(2.5, 3.7)
-        9.25
+    Runtime usage:
+        >>> list(pds_session.workflows("<deployment_id>").count_up(seed=2.0, step=1.5, count=4))
+        [2.0, 3.5, 5.0, 6.5]
     """
-    return a * b
+    start = float(seed)
+    delta = float(step)
+    size = max(0, int(count))
+    return [start + (idx * delta) for idx in range(size)]
+
+
+@workflow.bi_di
+async def compute_nn_layer(inputStream: WorkflowStreamInput[float, int, bool]) -> WorkflowStreamOutput[float]:
+    """Consume a bidirectional stream and yield transformed cumulative totals.
+
+    Note:
+        Stream chunk values are validated against the function signature:
+        `value: float`, `scale: int`, `bias: bool`.
+
+    Runtime usage:
+        >>> list(pds_session.workflows("<deployment_id>").compute_nn_layer([
+        ...     {"value": 3.0, "scale": 2, "bias": True},
+        ...     {"value": 5.0, "scale": 5, "bias": False},
+        ... ]))
+        [7.0, 32.0]
+        >>> list(pds_session.workflows("<deployment_id>").compute_nn_layer([
+        ...     [3.0, 2, True],
+        ...     [5.0, 5, False],
+        ... ]))
+        [7.0, 32.0]
+        >>> list(pds_session.workflows("<deployment_id>").compute_nn_layer(<generator of [3.0, 2, True] or {"value": 5.0, "scale": 5, "bias": False}>))
+        [7.0, 32.0]
+    """
+    total = 0.0
+    async for value, scale, bias in inputStream:  # generated runtime passes an async input iterator
+        current = float(value) * float(scale) + float(bias)
+        total += current
+        yield total
